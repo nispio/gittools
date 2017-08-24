@@ -3,7 +3,7 @@
 # Copyright (c) 2017 Josh Hunsaker
 # Copyright (c) 2005 Junio C Hamano
 #
-# Fetch one or more remote refs and merge it/them into the current HEAD.
+# Fetch a remote ref and merge the current HEAD into it.
 
 cmdname=pull; CmdName=Pull; CMDNAME=PULL
 USAGE='[-n | --no-stat] [--[no-]commit] [--[no-]squash] [--[no-]ff] [-s strategy]... [<fetch-options>] <repo> <head>...'
