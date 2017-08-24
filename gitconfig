@@ -1,0 +1,27 @@
+[alias]
+    all = branch --abbrev=4 -avv
+    ci = commit
+    co = checkout
+    conf = config --global
+    graph-log = log --graph --color --format='%C(yellow)%h%Creset %Cgreen%an:%Creset %s'
+    in = whatchanged ..@{u}
+    incoming = diff ..@{u}
+    ls = ls-files
+    out = whatchanged @{u}..
+    outgoing = diff @{u}..
+    st = status
+    stat = status
+    up = fetch --all --prune --verbose
+    what = whatchanged
+[color]
+    branch = true
+    diff = true
+    interactive = true
+    status = true
+    ui = true
+[merge]
+    ff = true
+[pull]
+    ff = only
+[push]
+    default = upstream
