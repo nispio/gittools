@@ -1,6 +1,7 @@
 [alias]
     all = branch --abbrev=4 -avv
-    ci = commit
+    amend = commit --amend -C HEAD
+    ci = commit -a
     co = checkout
     conf = config --global
     graph-log = log --graph --color --format='%C(yellow)%h%Creset %Cgreen%an:%Creset %s'
