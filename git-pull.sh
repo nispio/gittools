@@ -39,12 +39,38 @@ Please, commit your changes before you can merge."
 test -z "$(git ls-files -u)" || die_conflict
 test -f "$GIT_DIR/MERGE_HEAD" && die_merge
 
+bool_or_string_config () {
+	git config --bool "$1" 2>/dev/null || git config "$1"
+}
+
 strategy_args= diffstat= no_commit= squash= no_ff= ff_only=
-log_arg= verbosity= progress=
-merge_args=
+log_arg= verbosity= progress= recurse_submodules= verify_signatures=
+merge_args= edit= rebase_args= all= append= upload_pack= force= tags= prune=
+keep= depth= unshallow= update_shallow= refmap=
 curr_branch=$(git symbolic-ref -q HEAD)
 curr_branch_short="${curr_branch#refs/heads/}"
-rebase=$(git config --bool branch.$curr_branch_short.rebase)
+rebase=$(bool_or_string_config branch.$curr_branch_short.rebase)
+if test -z "$rebase"
+then
+	rebase=$(bool_or_string_config pull.rebase)
+fi
+
+# Setup default fast-forward options via `pull.ff`
+pull_ff=$(bool_or_string_config pull.ff)
+case "$pull_ff" in
+true)
+	no_ff=--ff
+	;;
+false)
+	no_ff=--no-ff
+	;;
+only)
+	ff_only=--ff-only
+	;;
+esac
+
+
+dry_run=
 while :
 do
 	case "$1" in
@@ -54,19 +80,25 @@ do
 		verbosity="$verbosity -v" ;;
 	--progress)
 		progress=--progress ;;
+	--no-progress)
+		progress=--no-progress ;;
 	-n|--no-stat|--no-summary)
 		diffstat=--no-stat ;;
 	--stat|--summary)
 		diffstat=--stat ;;
-	--log|--no-log)
-		log_arg=$1 ;;
-	--no-c|--no-co|--no-com|--no-comm|--no-commi|--no-commit)
+	--log|--log=*|--no-log)
+		log_arg="$1" ;;
+	--no-commit)
 		no_commit=--no-commit ;;
-	--c|--co|--com|--comm|--commi|--commit)
+	--commit)
 		no_commit=--commit ;;
-	--sq|--squ|--squa|--squas|--squash)
+	-e|--edit)
+		edit=--edit ;;
+	--no-edit)
+		edit=--no-edit ;;
+	--squash)
 		squash=--squash ;;
-	--no-sq|--no-squ|--no-squa|--no-squas|--no-squash)
+	--no-squash)
 		squash=--no-squash ;;
 	--ff)
 		no_ff=--ff ;;
@@ -74,39 +106,71 @@ do
 		no_ff=--no-ff ;;
 	--ff-only)
 		ff_only=--ff-only ;;
-	-s=*|--s=*|--st=*|--str=*|--stra=*|--strat=*|--strate=*|\
-		--strateg=*|--strategy=*|\
-	-s|--s|--st|--str|--stra|--strat|--strate|--strateg|--strategy)
-		case "$#,$1" in
-		*,*=*)
-			strategy=`expr "z$1" : 'z-[^=]*=\(.*\)'` ;;
-		1,*)
-			usage ;;
-		*)
-			strategy="$2"
-			shift ;;
-		esac
-		strategy_args="${strategy_args}-s $strategy "
+	-s*|--strategy=*)
+		strategy_args="$strategy_args $1"
 		;;
-	-X*)
-		case "$#,$1" in
-		1,-X)
-			usage ;;
-		*,-X)
-			xx="-X $(git rev-parse --sq-quote "$2")"
-			shift ;;
-		*,*)
-			xx=$(git rev-parse --sq-quote "$1") ;;
-		esac
-		merge_args="$merge_args$xx "
+	-X*|--strategy-option=*)
+		merge_args="$merge_args $(git rev-parse --sq-quote "$1")"
 		;;
-	-r|--r|--re|--reb|--reba|--rebas|--rebase)
+	-r*|--rebase=*)
+		rebase="${1#*=}"
+		;;
+	--rebase)
 		rebase=true
 		;;
-	--no-r|--no-re|--no-reb|--no-reba|--no-rebas|--no-rebase)
+	--no-rebase)
 		rebase=false
 		;;
-	-h|--h|--he|--hel|--help)
+	--recurse-submodules)
+		recurse_submodules=--recurse-submodules
+		;;
+	--recurse-submodules=*)
+		recurse_submodules="$1"
+		;;
+	--no-recurse-submodules)
+		recurse_submodules=--no-recurse-submodules
+		;;
+	--verify-signatures)
+		verify_signatures=--verify-signatures
+		;;
+	--no-verify-signatures)
+		verify_signatures=--no-verify-signatures
+		;;
+	--gpg-sign|-S)
+		gpg_sign_args=-S
+		;;
+	--gpg-sign=*)
+		gpg_sign_args=$(git rev-parse --sq-quote "-S${1#--gpg-sign=}")
+		;;
+	-S*)
+		gpg_sign_args=$(git rev-parse --sq-quote "$1")
+		;;
+	--dry-run)
+		dry_run=--dry-run
+		;;
+	--all|--no-all)
+		all=$1 ;;
+	-a|--append|--no-append)
+		append=$1 ;;
+	--upload-pack=*|--no-upload-pack)
+		upload_pack=$1 ;;
+	-f|--force|--no-force)
+		force="$force $1" ;;
+	-t|--tags|--no-tags)
+		tags=$1 ;;
+	-p|--prune|--no-prune)
+		prune=$1 ;;
+	-k|--keep|--no-keep)
+		keep=$1 ;;
+	--depth=*|--no-depth)
+		depth=$1 ;;
+	--unshallow|--no-unshallow)
+		unshallow=$1 ;;
+	--update-shallow|--no-update-shallow)
+		update_shallow=$1 ;;
+	--refmap=*|--no-refmap)
+		refmap=$1 ;;
+	-h|--help-all)
 		usage
 		;;
 	*)
@@ -117,17 +181,22 @@ do
 	shift
 done
 
+case "$rebase" in
+preserve)
+	rebase=true
+	rebase_args=--preserve-merges
+	;;
+true|false|'')
+	;;
+*)
+	echo "Invalid value for --rebase, should be true, false, or preserve"
+	usage
+	exit 1
+	;;
+esac
+
 error_on_no_merge_candidates () {
 	exec >&2
-	for opt
-	do
-		case "$opt" in
-		-t|--t|--ta|--tag|--tags)
-			echo "Fetching tags only, you probably meant:"
-			echo "  git fetch --tags"
-			exit 1
-		esac
-	done
 
 	if test true = "$rebase"
 	then
@@ -138,9 +207,8 @@ error_on_no_merge_candidates () {
 		op_prep=with
 	fi
 
-	curr_branch=${curr_branch#refs/heads/}
-	upstream=$(git config "branch.$curr_branch.merge")
-	remote=$(git config "branch.$curr_branch.remote")
+	upstream=$(git config "branch.$curr_branch_short.merge")
+	remote=$(git config "branch.$curr_branch_short.remote")
 
 	if [ $# -gt 1 ]; then
 		if [ "$rebase" = true ]; then
@@ -152,35 +220,13 @@ error_on_no_merge_candidates () {
 		echo "Generally this means that you provided a wildcard refspec which had no"
 		echo "matches on the remote end."
 	elif [ $# -gt 0 ] && [ "$1" != "$remote" ]; then
-		echo "You asked to $cmdname from the remote '$1', but did not specify"
+		echo "You asked to pull from the remote '$1', but did not specify"
 		echo "a branch. Because this is not the default configured remote"
 		echo "for your current branch, you must specify a branch on the command line."
-	elif [ -z "$curr_branch" ]; then
-		echo "You are not currently on a branch, so I cannot use any"
-		echo "'branch.<branchname>.merge' in your configuration file."
-		echo "Please specify which remote branch you want to use on the command"
-		echo "line and try again (e.g. 'git $cmdname <repository> <refspec>')."
-	elif [ -z "$upstream" ]; then
-		echo "You asked me to $cmdname without telling me which branch you"
-		echo "want to $op_type $op_prep, and 'branch.${curr_branch}.merge' in"
-		echo "your configuration file does not tell me, either. Please"
-		echo "specify which branch you want to use on the command line and"
-		echo "try again (e.g. 'git $cmdname <repository> <refspec>')."
-		echo
-		echo "If you often $op_type $op_prep the same branch, you may want to"
-		echo "use something like the following in your configuration file:"
-		echo
-		echo "    [branch \"${curr_branch}\"]"
-		echo "    remote = <nickname>"
-		echo "    merge = <remote-ref>"
-		test rebase = "$op_type" &&
-			echo "    rebase = true"
-		echo
-		echo "    [remote \"<nickname>\"]"
-		echo "    url = <url>"
-		echo "    fetch = <refspec>"
-		echo
-		echo "See git-config(1) for details."
+	elif [ -z "$curr_branch" -o -z "$upstream" ]; then
+		. git-parse-remote
+		error_on_missing_default_upstream "pull" $op_type $op_prep \
+			"git pull <remote> <branch>"
 	else
 		echo "Your configuration specifies to $op_type $op_prep the ref '${upstream#refs/heads/}'"
 		echo "from the remote, but no such ref was fetched."
@@ -192,17 +238,15 @@ test true = "$rebase" && {
 	if ! git rev-parse -q --verify HEAD >/dev/null
 	then
 		# On an unborn branch
-		if test -f "$GIT_DIR/index"
+		if test -f "$(git rev-parse --git-path index)"
 		then
 			die "updating an unborn branch with changes added to the index"
 		fi
 	else
-		git update-index --ignore-submodules --refresh &&
-		git diff-files --ignore-submodules --quiet &&
-		git diff-index --ignore-submodules --cached --quiet HEAD -- ||
-		die "refusing to $cmdname with rebase: your working tree is not up-to-date"
+		require_clean_work_tree "pull with rebase" "Please commit or stash them."
 	fi
 	oldremoteref= &&
+	test -n "$curr_branch" &&
 	. git-parse-remote &&
 	remoteref="$(get_remote_merge_branch "$@" 2>/dev/null)" &&
 	oldremoteref="$(git rev-parse -q --verify "$remoteref")" &&
@@ -216,7 +260,10 @@ test true = "$rebase" && {
 	done
 }
 orig_head=$(git rev-parse -q --verify HEAD)
-git fetch $verbosity $progress --update-head-ok "$@" || exit 1
+git fetch $verbosity $progress $dry_run $recurse_submodules $all $append \
+${upload_pack:+"$upload_pack"} $force $tags $prune $keep $depth $unshallow $update_shallow \
+$refmap --update-head-ok "$@" || exit 1
+test -z "$dry_run" || exit 0
 
 curr_head=$(git rev-parse -q --verify HEAD)
 if test -n "$orig_head" && test "$curr_head" != "$orig_head"
@@ -261,23 +308,40 @@ case "$merge_head" in
 	;;
 esac
 
+# Pulling into unborn branch: a shorthand for branching off
+# FETCH_HEAD, for lazy typers.
 if test -z "$orig_head"
 then
-	git update-ref -m "initial $cmdname" HEAD $merge_head "$curr_head" &&
-	git read-tree --reset -u HEAD || exit 1
+	# Two-way merge: we claim the index is based on an empty tree,
+	# and try to fast-forward to HEAD.  This ensures we will not
+	# lose index/worktree changes that the user already made on
+	# the unborn branch.
+	empty_tree=4b825dc642cb6eb9a060e54bf8d69288fbee4904
+	git read-tree -m -u $empty_tree $merge_head &&
+	git update-ref -m "initial pull" HEAD $merge_head "$curr_head"
 	exit
 fi
 
-merge_name=$(git fmt-merge-msg $log_arg <"$GIT_DIR/FETCH_HEAD") || exit
+if test true = "$rebase"
+then
+	o=$(git show-branch --merge-base $curr_branch $merge_head $oldremoteref)
+	if test "$oldremoteref" = "$o"
+	then
+		unset oldremoteref
+	fi
+fi
+
 case "$rebase" in
 true)
-	eval="git-rebase $diffstat $strategy_args $merge_args"
+	eval="git-rebase $diffstat $strategy_args $merge_args $rebase_args $verbosity"
+	eval="$eval $gpg_sign_args"
 	eval="$eval --onto $merge_head ${oldremoteref:-$merge_head}"
 	;;
 *)
-	eval="git-merge $diffstat $no_commit $squash $no_ff $ff_only"
-	eval="$eval  $log_arg $strategy_args $merge_args"
-	eval="$eval \"\$merge_name\" HEAD $merge_head $verbosity"
+	eval="git-merge $diffstat $no_commit $verify_signatures $edit $squash $no_ff $ff_only"
+	eval="$eval $log_arg $strategy_args $merge_args $verbosity $progress"
+	eval="$eval $gpg_sign_args"
+	eval="$eval FETCH_HEAD"
 	;;
 esac
 eval "exec $eval"
