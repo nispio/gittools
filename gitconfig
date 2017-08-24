@@ -6,6 +6,7 @@
     colordiff = diff --no-index --
     conf = config --global
     graph-log = log --graph --color --format='%C(yellow)%h%Creset %Cgreen%an:%Creset %s'
+    hard = reset --hard
     in = whatchanged ..@{u}
     incoming = diff ..@{u}
     ls = ls-files
